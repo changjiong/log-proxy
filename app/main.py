@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -17,11 +18,23 @@ def create_app(
     log_db: LogDB | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        await app.state.log_db.init()
+        try:
+            yield
+        finally:
+            if app.state.log_tasks:
+                await asyncio.gather(*app.state.log_tasks, return_exceptions=True)
+            if not app.state.external_http_client:
+                await app.state.http_client.aclose()
+
     app = FastAPI(
         title="OpenAI-compatible Log Proxy",
         version="0.1.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.log_db = log_db or LogDB(settings.sqlite_path)
@@ -31,17 +44,6 @@ def create_app(
         limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
     )
     app.state.log_tasks: set[asyncio.Task] = set()
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        await app.state.log_db.init()
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        if app.state.log_tasks:
-            await asyncio.gather(*app.state.log_tasks, return_exceptions=True)
-        if not app.state.external_http_client:
-            await app.state.http_client.aclose()
 
     @app.get("/health")
     async def health() -> dict[str, str]:
