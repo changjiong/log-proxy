@@ -1,0 +1,36 @@
+services:
+  log-proxy:
+    build: .
+    image: openai-log-proxy:local
+    container_name: log-proxy
+    restart: unless-stopped
+    environment:
+      # CPA / CLIProxyAPI upstream. Same Docker network should use the internal service alias.
+      UPSTREAM_BASE_URL: "http://relay-cli-proxy:8317/v1"
+      UPSTREAM_API_KEY: "sk-your-cpa-key"
+
+      # new-api channel should use this key when calling log-proxy.
+      PROXY_API_KEY: "sk-your-log-proxy-key"
+
+      # Only needed for /logs API. Leave unset to disable log API endpoints.
+      ADMIN_API_KEY: "sk-your-admin-key"
+
+      SQLITE_PATH: "/data/log-proxy.sqlite3"
+      REQUEST_TIMEOUT_SECONDS: "600"
+      MAX_LOG_BODY_BYTES: "2000000"
+      LOG_REQUEST_BODY: "true"
+      LOG_RESPONSE_BODY: "true"
+      LOG_STREAM_CHUNKS: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - log_proxy_data:/data
+    networks:
+      - ai-relay
+
+networks:
+  ai-relay:
+    external: true
+
+volumes:
+  log_proxy_data:
