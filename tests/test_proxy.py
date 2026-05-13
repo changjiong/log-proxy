@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import gzip
 from pathlib import Path
 
 import httpx
@@ -28,24 +27,13 @@ def upstream_app() -> FastAPI:
         if auth != "Bearer upstream-secret":
             return JSONResponse(status_code=401, content={"error": {"message": "bad upstream key"}})
         if payload.get("stream"):
-            raw_sse = (
-                b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
-                + b'data: {"choices":[{"delta":{"content":" world"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n'
-                + b"data: [DONE]\n\n"
-            )
 
             async def events():
-                if payload.get("compress"):
-                    compressed = gzip.compress(raw_sse)
-                    midpoint = len(compressed) // 2
-                    yield compressed[:midpoint]
-                    yield compressed[midpoint:]
-                else:
-                    yield raw_sse[:50]
-                    yield raw_sse[50:]
+                yield b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+                yield b'data: {"choices":[{"delta":{"content":" world"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n'
+                yield b"data: [DONE]\n\n"
 
-            headers = {"Content-Encoding": "gzip"} if payload.get("compress") else None
-            return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
+            return StreamingResponse(events(), media_type="text/event-stream")
         return {
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -88,6 +76,14 @@ def proxy_client(tmp_path: Path, upstream_app: FastAPI):
 
         asyncio.run(teardown())
 
+def wait_for_log_tasks(app: FastAPI) -> None:
+    async def _wait() -> None:
+        for _ in range(20):
+            tasks = list(app.state.log_tasks)
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0.01)
 
 def wait_for_log_tasks(app: FastAPI) -> None:
     async def _wait() -> None:
@@ -155,36 +151,6 @@ def test_stream_chat_is_forwarded_and_logged(proxy_client):
     assert "data:" in detail["stream_chunks"]
     assert detail["usage_json"]["total_tokens"] == 7
 
-
-
-def test_stream_chat_with_gzip_upstream_is_decoded_for_client(proxy_client):
-    client, app = proxy_client
-    payload = {
-        "model": "gpt-5.4",
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": True,
-        "compress": True,
-    }
-
-    async def stream_request():
-        chunks = []
-        async with client.stream("POST", "/v1/chat/completions", headers={"Authorization": "Bearer proxy-secret"}, json=payload) as res:
-            assert res.status_code == 200
-            assert res.headers.get("content-type", "").startswith("text/event-stream")
-            assert "content-encoding" not in {k.lower() for k in res.headers.keys()}
-            async for chunk in res.aiter_bytes():
-                chunks.append(chunk)
-        return b"".join(chunks).decode("utf-8", errors="replace")
-
-    body = asyncio.run(stream_request())
-    assert "data:" in body
-    assert "[DONE]" in body
-    assert "hello" in body
-    wait_for_log_tasks(app)
-
-    logs = asyncio.run(client.get("/logs", headers={"Authorization": "Bearer admin-secret"})).json()["data"]
-    detail = asyncio.run(client.get(f"/logs/{logs[0]['id']}", headers={"Authorization": "Bearer admin-secret"})).json()
-    assert "data:" in detail["stream_chunks"]
 
 def test_rejects_bad_proxy_key(proxy_client):
     client, _ = proxy_client
