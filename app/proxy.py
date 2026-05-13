@@ -29,6 +29,11 @@ HOP_BY_HOP_HEADERS = {
 }
 
 
+
+COMPRESSION_RESPONSE_HEADERS = {
+    "content-encoding",
+}
+
 def extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -78,6 +83,7 @@ def filter_inbound_headers(headers: Headers, settings: Settings, request_id: str
         out[key] = value
     if settings.upstream_api_key:
         out["Authorization"] = f"Bearer {settings.upstream_api_key.get_secret_value()}"
+    out["Accept-Encoding"] = "identity"
     out["X-Log-Proxy-Request-ID"] = request_id
     return out
 
@@ -85,7 +91,7 @@ def filter_inbound_headers(headers: Headers, settings: Settings, request_id: str
 def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in headers.items():
-        if key.lower() in HOP_BY_HOP_HEADERS:
+        if key.lower() in HOP_BY_HOP_HEADERS or key.lower() in COMPRESSION_RESPONSE_HEADERS:
             continue
         out[key] = value
     return out
@@ -310,7 +316,7 @@ async def proxy_request(request: Request, path: str) -> Response:
             async def stream_generator() -> AsyncIterator[bytes]:
                 error_json: str | None = None
                 try:
-                    async for chunk in upstream_response.aiter_raw():
+                    async for chunk in upstream_response.aiter_bytes():
                         if chunk:
                             assembler.add_chunk(chunk, keep_raw=settings.log_stream_chunks)
                             yield chunk

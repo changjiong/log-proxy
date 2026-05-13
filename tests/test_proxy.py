@@ -76,6 +76,14 @@ def proxy_client(tmp_path: Path, upstream_app: FastAPI):
 
         asyncio.run(teardown())
 
+def wait_for_log_tasks(app: FastAPI) -> None:
+    async def _wait() -> None:
+        for _ in range(20):
+            tasks = list(app.state.log_tasks)
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0.01)
 
 def wait_for_log_tasks(app: FastAPI) -> None:
     async def _wait() -> None:
